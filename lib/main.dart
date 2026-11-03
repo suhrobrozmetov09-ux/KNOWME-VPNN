@@ -44,7 +44,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final WireGuardFlutter _wireguard = WireGuardFlutter.instance;
+  final _wireguard = WireGuardFlutter.instance;
   StreamSubscription<dynamic>? _stageSubscription;
 
   String? _config;
