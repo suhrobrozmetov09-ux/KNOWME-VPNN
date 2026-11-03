@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,35 +23,69 @@ jobs:
         with:
           channel: stable
 
-      - name: Generate Android and iOS
-        run: flutter create --platforms=android,ios --org com.knowme .
+      - name: Generate Android project
+        run: flutter create --platforms=android --org com.knowme .
 
-      
-      - name: Set compileSdk 36
+      - name: Set Android compile SDK 36
         run: |
-          FILE="android/app/build.gradle.kts"
-          if [ ! -f "$FILE" ]; then
-            FILE="android/app/build.gradle"
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-          if [ ! -f "$FILE" ]; then
-            echo "ERROR: Gradle file not found"
-            exit 1
-          fi
+          files = [
+              Path("android/app/build.gradle.kts"),
+              Path("android/app/build.gradle")
+          ]
 
-          sed -i \
-            -e 's/flutter\.compileSdkVersion/36/g' \
-            -e 's/compileSdkVersion [0-9]*/compileSdkVersion 36/g' \
-            -e 's/compileSdk = [0-9]*/compileSdk = 36/g' \
-            "$FILE"
+          p = next((f for f in files if f.exists()), None)
 
-          echo "CHECK COMPILE SDK:"
-          grep -n "compileSdk" "$FILE"
+          if p is None:
+              raise SystemExit("ERROR: Gradle file not found")
 
-          grep -q "36" "$FILE" || exit 1
+          s = p.read_text()
+          s = s.replace("flutter.compileSdkVersion", "36")
+
+          s = re.sub(
+              r'(?m)^(\s*compileSdk\s*=\s*)\d+.*$',
+              r'\g<1>36',
+              s
+          )
+
+          s = re.sub(
+              r'(?m)^(\s*compileSdkVersion\s+)\d+.*$',
+              r'\g<1>36',
+              s
+          )
+
+          p.write_text(s)
+
+          print("Gradle file:", p)
+          for line in s.splitlines():
+              if "compileSdk" in line:
+                  print(line)
+
+          if not re.search(
+              r'(?m)^\s*compileSdk(?:Version)?\s*(?:=\s*)?36\b',
+              s
+          ):
+              raise SystemExit("ERROR: compileSdk 36 was not set")
+          PY
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Check APK
+        run: |
+          echo "Searching for APK..."
+          find build -type f -name "*.apk" -print
+          test -f build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: KNOWME-VPN-Android
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
