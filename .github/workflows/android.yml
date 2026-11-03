@@ -46,3 +46,9 @@ jobs:
           grep -n "compileSdk" "$FILE"
 
           grep -q "36" "$FILE" || exit 1
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KNOWME-VPN-Android
+          path: build/app/outputs/flutter-apk/app-release.apk
