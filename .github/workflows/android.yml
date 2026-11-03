@@ -1,4 +1,5 @@
-name: KNOWME VPN Android Build
+
+name: KNOWME VPN Build
 
 on:
   workflow_dispatch:
@@ -17,6 +18,9 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+
+      - name: Generate Android and iOS folders
+        run: flutter create --platforms=android,ios --org com.knowme .
 
       - name: Get packages
         run: flutter pub get
