@@ -60,7 +60,6 @@ jobs:
               raise SystemExit("ERROR: compileSdk qatori topilmadi!")
           PY
 
-
       - name: Install dependencies
         run: flutter pub get
 
