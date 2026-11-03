@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -7,10 +8,22 @@ import 'package:wireguard_flutter_plus/wireguard_flutter_plus.dart';
 
 void main() => runApp(const KnowmeApp());
 
-const kRed = Color(0xFFFF3038);
-const kBg = Color(0xFF090909);
-const kPanel = Color(0xFF171717);
-const kExtensionBundleId = 'com.knowme.vpn.WGExtension';
+const red = Color(0xFFFF3038);
+const bg = Color(0xFF090909);
+const panel = Color(0xFF171717);
+const extensionId = 'com.knowme.vpn.WGExtension';
+
+class VpnServer {
+  final String name;
+  final String config;
+  final String endpoint;
+
+  const VpnServer({
+    required this.name,
+    required this.config,
+    required this.endpoint,
+  });
+}
 
 class KnowmeApp extends StatelessWidget {
   const KnowmeApp({super.key});
@@ -22,13 +35,8 @@ class KnowmeApp extends StatelessWidget {
       title: 'KNOWME VPN',
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: kBg,
-        colorScheme: const ColorScheme.dark(
-          primary: kRed,
-          secondary: kRed,
-          surface: kPanel,
-        ),
-        fontFamily: 'Arial',
+        scaffoldBackgroundColor: bg,
+        colorScheme: const ColorScheme.dark(primary: red),
         useMaterial3: true,
       ),
       home: const HomePage(),
@@ -44,32 +52,34 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final _wireguard = WireGuardFlutter.instance;
-  StreamSubscription<dynamic>? _stageSubscription;
+  final wireguard = WireGuardFlutter.instance;
+  StreamSubscription<dynamic>? subscription;
 
-  String? _config;
-  String? _endpoint;
-  String _status = 'DISCONNECTED';
-  String _selectedServer = 'No server imported';
-  bool _busy = false;
+  final List<VpnServer> servers = [];
+  int selectedIndex = 0;
+  String status = 'DISCONNECTED';
+  bool busy = false;
 
-  bool get _connected => _status.toLowerCase().contains('connected') &&
-      !_status.toLowerCase().contains('disconnected');
+  VpnServer? get selected =>
+      servers.isEmpty ? null : servers[selectedIndex];
+
+  bool get connected {
+    final s = status.toLowerCase();
+    return s.contains('connected') && !s.contains('disconnected');
+  }
 
   @override
   void initState() {
     super.initState();
-    _listenForStatus();
-  }
-
-  void _listenForStatus() {
-    _stageSubscription = _wireguard.vpnStageSnapshot.listen((stage) {
+    subscription = wireguard.vpnStageSnapshot.listen((stage) {
       if (!mounted) return;
-      setState(() => _status = stage.toString().split('.').last.toUpperCase());
+      setState(() {
+        status = stage.toString().split('.').last.toUpperCase();
+      });
     });
   }
 
-  String? _readEndpoint(String config) {
+  String? readEndpoint(String config) {
     final match = RegExp(
       r'^\s*Endpoint\s*=\s*(\S+)',
       multiLine: true,
@@ -78,180 +88,199 @@ class _HomePageState extends State<HomePage> {
     return match?.group(1);
   }
 
-  Future<void> _importConfig() async {
+  Future<void> importConfigs() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['conf'],
+        allowMultiple: true,
         withData: true,
       );
-      if (result == null || result.files.isEmpty) return;
 
-      final file = result.files.single;
-      final bytes = file.bytes;
-      if (bytes == null) {
-        _showMessage('Could not read this file. Please try another .conf file.');
-        return;
+      if (result == null) return;
+
+      int skipped = 0;
+      int added = 0;
+
+      for (final file in result.files) {
+        if (file.bytes == null) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          final config = utf8.decode(file.bytes!);
+          if (!config.contains('[Interface]') ||
+              !config.contains('[Peer]')) {
+            skipped++;
+            continue;
+          }
+
+          final endpoint = readEndpoint(config);
+          if (endpoint == null || !endpoint.contains(':')) {
+            skipped++;
+            continue;
+          }
+
+          final name = file.name.replaceAll(
+            RegExp(r'\.conf$', caseSensitive: false),
+            '',
+          );
+
+          final exists = servers.any(
+            (s) => s.name == name && s.endpoint == endpoint,
+          );
+
+          if (!exists) {
+            servers.add(VpnServer(
+              name: name.isEmpty ? endpoint : name,
+              config: config,
+              endpoint: endpoint,
+            ));
+            added++;
+          }
+        } catch (_) {
+          skipped++;
+        }
       }
 
-      final config = utf8.decode(bytes, allowMalformed: false);
-      if (!config.contains('[Interface]') || !config.contains('[Peer]')) {
-        _showMessage('This does not look like a WireGuard configuration.');
-        return;
-      }
-
-      final endpoint = _readEndpoint(config);
-      if (endpoint == null || !endpoint.contains(':')) {
-        _showMessage('The configuration is missing a valid Endpoint.');
-        return;
-      }
-
+      if (!mounted) return;
       setState(() {
-        _config = config;
-        _endpoint = endpoint;
-        _selectedServer = endpoint;
+        if (selectedIndex >= servers.length) selectedIndex = 0;
       });
-      _showMessage('Configuration imported. Keep it private.');
-    } on FormatException {
-      _showMessage('The configuration file is not valid UTF-8 text.');
-    } catch (e) {
-      _showMessage('Import failed: $e');
+
+      message(
+        '$added server added. Total: ${servers.length}. '
+        'Skipped: $skipped',
+      );
+    } catch (_) {
+      message('Could not import configuration files.');
     }
   }
 
-  Future<void> _toggleVpn() async {
-    if (_busy) return;
-    if (_connected) {
-      await _disconnect();
+  Future<void> toggleVpn() async {
+    if (busy) return;
+
+    if (connected) {
+      await disconnectVpn();
       return;
     }
-    if (_config == null || _endpoint == null) {
-      _showMessage('Import a WireGuard .conf file first.');
+
+    final server = selected;
+    if (server == null) {
+      message('Import your .conf files first.');
       return;
     }
 
     setState(() {
-      _busy = true;
-      _status = 'CONNECTING';
+      busy = true;
+      status = 'CONNECTING';
     });
 
     try {
-      await _wireguard.initialize(
+      await wireguard.initialize(
         interfaceName: 'wg0',
         vpnName: 'KNOWME VPN',
       );
-      await _wireguard.startVpn(
-        serverAddress: _endpoint!,
-        wgQuickConfig: _config!,
-        providerBundleIdentifier: kExtensionBundleId,
+
+      await wireguard.startVpn(
+        serverAddress: server.endpoint,
+        wgQuickConfig: server.config,
+        providerBundleIdentifier: extensionId,
       );
-      if (mounted) {
-        setState(() => _status = 'CONNECTING');
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _status = 'DISCONNECTED');
-      }
-      _showMessage('VPN could not start. Check platform setup and config.');
+
+      if (mounted) setState(() => status = 'CONNECTING');
+    } catch (_) {
+      if (mounted) setState(() => status = 'DISCONNECTED');
+      message('VPN setup or Apple signing is not ready.');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => busy = false);
     }
   }
 
-  Future<void> _disconnect() async {
+  Future<void> disconnectVpn() async {
     setState(() {
-      _busy = true;
-      _status = 'DISCONNECTING';
+      busy = true;
+      status = 'DISCONNECTING';
     });
+
     try {
-      await _wireguard.stopVpn();
-      if (mounted) setState(() => _status = 'DISCONNECTED');
-    } catch (e) {
-      _showMessage('Disconnect failed: $e');
+      await wireguard.stopVpn();
+      if (mounted) setState(() => status = 'DISCONNECTED');
+    } catch (_) {
+      message('Disconnect failed.');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => busy = false);
     }
   }
 
-  void _showMessage(String message) {
+  void message(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
-        backgroundColor: const Color(0xFF292929),
-        behavior: SnackBarBehavior.floating,
+        content: Text(text),
+        backgroundColor: panel,
       ),
     );
   }
 
   @override
   void dispose() {
-    _stageSubscription?.cancel();
+    subscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _connected ? Colors.greenAccent : kRed;
+    final server = selected;
+    final statusColor = connected ? Colors.greenAccent : red;
+
     return Scaffold(
       body: SafeArea(
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(22, 18, 22, 12),
+              padding: const EdgeInsets.all(22),
               child: Row(
                 children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: kRed,
-                      borderRadius: BorderRadius.circular(13),
-                    ),
-                    child: const Icon(Icons.bolt_rounded,
-                        color: Colors.white, size: 28),
-                  ),
-                  const SizedBox(width: 12),
+                  const Icon(Icons.bolt, color: red, size: 38),
+                  const SizedBox(width: 10),
                   const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('KNOWME',
                           style: TextStyle(
-                            fontSize: 20,
+                            fontSize: 21,
                             fontWeight: FontWeight.w900,
                             letterSpacing: 2,
                           )),
-                      Text('VPN', style: TextStyle(
-                        color: kRed,
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 4,
-                      )),
+                      Text('VPN',
+                          style: TextStyle(
+                            color: red,
+                            letterSpacing: 4,
+                            fontWeight: FontWeight.bold,
+                          )),
                     ],
                   ),
                   const Spacer(),
                   IconButton(
-                    onPressed: _importConfig,
-                    tooltip: 'Import config',
-                    icon: const Icon(Icons.add_circle_outline,
-                        color: Colors.white70, size: 27),
+                    onPressed: busy || connected ? null : importConfigs,
+                    icon: const Icon(Icons.add_circle_outline),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 18),
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 22),
-              padding: const EdgeInsets.all(17),
+              padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: kPanel,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(.06)),
+                color: panel,
+                borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.shield_outlined, color: kRed, size: 28),
-                  const SizedBox(width: 13),
+                  const Icon(Icons.shield, color: red, size: 28),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -260,154 +289,162 @@ class _HomePageState extends State<HomePage> {
                             style: TextStyle(
                               color: Colors.white54,
                               fontSize: 10,
-                              letterSpacing: 1.5,
-                              fontWeight: FontWeight.bold,
                             )),
                         const SizedBox(height: 5),
-                        Text(_status,
+                        Text(status,
                             style: TextStyle(
                               color: statusColor,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1.2,
+                              fontWeight: FontWeight.bold,
                             )),
                       ],
                     ),
                   ),
-                  Container(
-                    width: 9,
-                    height: 9,
-                    decoration: BoxDecoration(
-                      color: statusColor,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(color: statusColor.withOpacity(.6), blurRadius: 9)
-                      ],
-                    ),
-                  ),
+                  Icon(Icons.circle, color: statusColor, size: 10),
                 ],
               ),
             ),
             const Spacer(),
             GestureDetector(
-              onTap: _busy ? null : _toggleVpn,
+              onTap: busy ? null : toggleVpn,
               child: Container(
-                width: 218,
-                height: 218,
+                width: 205,
+                height: 205,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      kRed.withOpacity(.25),
-                      kRed.withOpacity(.08),
-                      kBg,
-                    ],
-                    stops: const [0, .65, 1],
-                  ),
-                  border: Border.all(color: kRed.withOpacity(.55), width: 1.5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: kRed.withOpacity(.18),
-                      blurRadius: 38,
-                      spreadRadius: 5,
-                    ),
-                  ],
+                  color: red.withOpacity(.12),
+                  border: Border.all(color: red, width: 2),
                 ),
                 child: Center(
                   child: Container(
                     width: 150,
                     height: 150,
-                    decoration: BoxDecoration(
-                      color: kRed,
+                    decoration: const BoxDecoration(
+                      color: red,
                       shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: kRed.withOpacity(.35),
-                          blurRadius: 25,
-                          spreadRadius: 2,
-                        )
-                      ],
                     ),
-                    child: _busy
+                    child: busy
                         ? const Center(
-                            child: CircularProgressIndicator(color: Colors.white))
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                            ),
+                          )
                         : Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(_connected ? Icons.power_settings_new : Icons.bolt,
-                                  color: Colors.white, size: 43),
-                              const SizedBox(height: 5),
-                              Text(_connected ? 'DISCONNECT' : 'CONNECT',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: 1.5,
-                                  )),
+                              Icon(
+                                connected
+                                    ? Icons.power_settings_new
+                                    : Icons.bolt,
+                                size: 43,
+                                color: Colors.white,
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                connected ? 'DISCONNECT' : 'CONNECT',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
                             ],
                           ),
                   ),
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             Text(
-              _connected ? 'Your tunnel is active' : 'Tap to connect securely',
-              style: const TextStyle(color: Colors.white54, fontSize: 13),
+              connected ? 'Tunnel active' : 'Tap to connect',
+              style: const TextStyle(color: Colors.white54),
             ),
             const Spacer(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(22, 0, 22, 25),
-              child: Container(
-                padding: const EdgeInsets.all(17),
-                decoration: BoxDecoration(
-                  color: kPanel,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.white.withOpacity(.06)),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.public, color: kRed),
-                        const SizedBox(width: 10),
-                        const Expanded(
-                          child: Text('SELECTED SERVER',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 11,
-                                letterSpacing: 1.2,
-                              )),
-                        ),
-                        TextButton(
-                          onPressed: _importConfig,
-                          child: const Text('IMPORT .CONF',
-                              style: TextStyle(color: kRed, fontSize: 11)),
-                        ),
-                      ],
-                    ),
-                    const Divider(color: Colors.white12, height: 18),
-                    Row(
-                      children: [
-                        const Icon(Icons.dns_outlined,
-                            color: Colors.white54, size: 20),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _selectedServer,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13),
+            Container(
+              margin: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+              padding: const EdgeInsets.all(17),
+              decoration: BoxDecoration(
+                color: panel,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.public, color: red),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'SELECT SERVER',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1,
                           ),
                         ),
-                        Icon(
-                          _config == null ? Icons.warning_amber_rounded : Icons.check_circle,
-                          color: _config == null ? Colors.orangeAccent : Colors.greenAccent,
-                          size: 18,
+                      ),
+                      TextButton(
+                        onPressed:
+                            busy || connected ? null : importConfigs,
+                        child: const Text(
+                          'IMPORT .CONF',
+                          style: TextStyle(color: red),
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                  const Divider(color: Colors.white12),
+                  if (servers.isEmpty)
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'No servers imported',
+                        style: TextStyle(color: Colors.white54),
+                      ),
+                    )
+                  else
+                    DropdownButtonHideUnderline(
+                      child: DropdownButton<int>(
+                        value: selectedIndex,
+                        isExpanded: true,
+                        dropdownColor: panel,
+                        items: List.generate(servers.length, (index) {
+                          return DropdownMenuItem(
+                            value: index,
+                            child: Text(servers[index].name),
+                          );
+                        }),
+                        onChanged: busy || connected
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setState(() => selectedIndex = value);
+                                }
+                              },
+                      ),
+                    ),
+                  if (server != null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        server.endpoint,
+                        style: const TextStyle(
+                          color: Colors.white38,
+                          fontSize: 11,
+                        ),
+                      ),
                     ),
                   ],
-                ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '${servers.length} server(s) imported',
+                      style: const TextStyle(
+                        color: Colors.white38,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
