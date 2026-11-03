@@ -20,45 +20,22 @@ jobs:
         with:
           channel: stable
 
-      - name: Generate Android and iOS folders
+      - name: Generate Android and iOS
         run: flutter create --platforms=android,ios --org com.knowme .
 
-      - name: 
-      - name: Set Android compile SDK
+      - name: Set compileSdk 36
         run: |
-          python3 - <<'PY'
-          import re
-          from pathlib import Path
+          FILE="android/app/build.gradle.kts"
+          if [ ! -f "$FILE" ]; then
+            FILE="android/app/build.gradle"
+          fi
+          if [ ! -f "$FILE" ]; then
+            echo "ERROR: Gradle file not found"
+            exit 1
+          fi
+          sed -i -E 's/compileSdk(Version)?[[:space:]]*=?[[:space:]]*[0-9]+/compileSdk = 36/' "$FILE"
+          grep -n "compileSdk" "$FILE"
 
-          files = [
-              Path("android/app/build.gradle"),
-              Path("android/app/build.gradle.kts"),
-          ]
-
-          changed = False
-
-          for file in files:
-              if not file.exists():
-                  continue
-
-              content = file.read_text()
-              updated, count = re.subn(
-                  r'(?m)^(\s*compileSdk(?:Version)?\s*=?\s*)[^\r\n]+',
-                  r'\g<1>36',
-                  content
-              )
-
-              if count:
-                  file.write_text(updated)
-                  print(f"UPDATED: {file}")
-                  changed = True
-                  for line in updated.splitlines():
-                      if "compileSdk" in line:
-                          print(line.strip())
-
-          if not changed:
-              raise SystemExit("ERROR: compileSdk qatori topilmadi!")
-          PY
       - name: Install dependencies
         run: flutter pub get
 
