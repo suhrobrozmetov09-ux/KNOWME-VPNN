@@ -23,10 +23,43 @@ jobs:
       - name: Generate Android and iOS folders
         run: flutter create --platforms=android,ios --org com.knowme .
 
+      - name: 
       - name: Set Android compile SDK
         run: |
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' android/app/build.gradle.kts || true
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/' android/app/build.gradle || true
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          files = [
+              Path("android/app/build.gradle"),
+              Path("android/app/build.gradle.kts"),
+          ]
+
+          changed = False
+
+          for file in files:
+              if not file.exists():
+                  continue
+
+              content = file.read_text()
+              updated, count = re.subn(
+                  r'(?m)^(\s*compileSdk(?:Version)?\s*=?\s*)[^\r\n]+',
+                  r'\g<1>36',
+                  content
+              )
+
+              if count:
+                  file.write_text(updated)
+                  print(f"UPDATED: {file}")
+                  changed = True
+                  for line in updated.splitlines():
+                      if "compileSdk" in line:
+                          print(line.strip())
+
+          if not changed:
+              raise SystemExit("ERROR: compileSdk qatori topilmadi!")
+          PY
+
 
       - name: Install dependencies
         run: flutter pub get
