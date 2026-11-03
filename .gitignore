@@ -1,0 +1,9 @@
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+ios/Flutter/.last_build_id
+*.conf
+.env
