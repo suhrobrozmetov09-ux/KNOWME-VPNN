@@ -23,27 +23,26 @@ jobs:
       - name: Generate Android and iOS
         run: flutter create --platforms=android,ios --org com.knowme .
 
+      
       - name: Set compileSdk 36
         run: |
           FILE="android/app/build.gradle.kts"
           if [ ! -f "$FILE" ]; then
             FILE="android/app/build.gradle"
           fi
+
           if [ ! -f "$FILE" ]; then
             echo "ERROR: Gradle file not found"
             exit 1
           fi
-          sed -i -E 's/compileSdk(Version)?[[:space:]]*=?[[:space:]]*[0-9]+/compileSdk = 36/' "$FILE"
+
+          sed -i \
+            -e 's/flutter\.compileSdkVersion/36/g' \
+            -e 's/compileSdkVersion [0-9]*/compileSdkVersion 36/g' \
+            -e 's/compileSdk = [0-9]*/compileSdk = 36/g' \
+            "$FILE"
+
+          echo "CHECK COMPILE SDK:"
           grep -n "compileSdk" "$FILE"
 
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build APK
-        run: flutter build apk --release
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: KNOWME-VPN-Android
-          path: build/app/outputs/flutter-apk/app-release.apk
+          grep -q "36" "$FILE" || exit 1
